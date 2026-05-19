@@ -13,7 +13,7 @@ const server = http.createServer(app);
 // Dynamic CORS configuration
 const allowedOrigins = [
   process.env.CLIENT_URL,
-  'https://gmeetreplica.onrender.com', // Add your production frontend URL here
+  'https://gmeetreplica-frontend.onrender.com', // Your actual frontend URL
   'http://localhost:5173',
   'http://127.0.0.1:5173'
 ].filter(Boolean);
