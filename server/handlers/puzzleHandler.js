@@ -57,7 +57,7 @@ const puzzleHandler = (io, socket) => {
       // Notify everyone about submission (status update)
       io.to(roomCode).emit('submission-received', submission);
       
-      // Update leaderboard
+      // Update leaderboard (broadcasting to everyone in the room)
       const leaderboard = [...room.students].sort((a, b) => b.score - a.score);
       io.to(roomCode).emit('leaderboard-update', leaderboard);
       

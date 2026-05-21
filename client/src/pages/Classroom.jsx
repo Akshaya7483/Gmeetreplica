@@ -74,7 +74,13 @@ const Classroom = () => {
       status: "success",
       duration: 2000,
     });
-  }, [hasSubmitted, roomCode, selectedAnswer, toast]);
+
+    // Close the modal after a short delay to let the user see the "Submitted" state
+    setTimeout(() => {
+      onClose();
+      dispatch({ type: 'PUZZLE_ENDED' }); // Clear local state to return to video
+    }, 1500);
+  }, [hasSubmitted, roomCode, selectedAnswer, toast, onClose, dispatch]);
 
   // Memoize heavy components
   const videoComponent = useMemo(() => (

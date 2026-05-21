@@ -150,25 +150,65 @@ const WebRTCVideoRoom = memo(({ roomCode, userId, userName, isTeacher }) => {
       if (signal.type === 'offer') {
         if (!pc) {
           // If we receive an offer and don't have a PC yet, we are the receiver
+          console.log(`[WEBRTC] Receiving offer from ${fromName || from}`);
           pc = createPeerConnection(from, fromName || 'Remote User', false);
         }
-        await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        socket.emit('webrtc-signal', {
-          to: from,
-          signal: { type: 'answer', sdp: pc.localDescription }
-        });
+        
+        // Wait for PC to be stable before setting remote description
+        if (pc.signalingState !== 'stable') {
+          console.log(`[WEBRTC] PC not stable (${pc.signalingState}), waiting...`);
+          await new Promise(resolve => {
+            const check = () => {
+              if (pc.signalingState === 'stable') resolve();
+              else setTimeout(check, 50);
+            };
+            check();
+          });
+        }
+
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          socket.emit('webrtc-signal', {
+            to: from,
+            signal: { type: 'answer', sdp: pc.localDescription }
+          });
+        } catch (err) {
+          console.error('[WEBRTC] Error handling offer:', err);
+        }
       } else if (signal.type === 'answer') {
         if (pc) {
-          await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+          } catch (err) {
+            console.error('[WEBRTC] Error handling answer:', err);
+          }
         }
       } else if (signal.type === 'ice-candidate') {
         if (pc) {
           try {
-            await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+            // Only add candidate if remote description is set
+            if (pc.remoteDescription) {
+              await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+            } else {
+              // Queue candidate if remote description not yet set
+              console.log('[WEBRTC] Queuing ICE candidate (remote description not set)');
+              const queue = pc._candidateQueue || [];
+              queue.push(signal.candidate);
+              pc._candidateQueue = queue;
+              
+              const checkRemote = setInterval(async () => {
+                if (pc.remoteDescription) {
+                  clearInterval(checkRemote);
+                  while (pc._candidateQueue.length) {
+                    await pc.addIceCandidate(new RTCIceCandidate(pc._candidateQueue.shift()));
+                  }
+                }
+              }, 100);
+            }
           } catch (e) {
-            console.error('Error adding ice candidate', e);
+            console.error('[WEBRTC] Error adding ice candidate', e);
           }
         }
       }
@@ -179,12 +219,36 @@ const WebRTCVideoRoom = memo(({ roomCode, userId, userName, isTeacher }) => {
       removePeer(id);
     };
 
+    // When the room is joined, the new user receives the list of current students
+    const handleRoomJoined = (data) => {
+      const { roomData } = data;
+      console.log(`[WEBRTC] Room joined, syncing peers. Teacher: ${roomData.teacher?.name}`);
+      
+      // New user initiates connection with existing teacher
+      if (roomData.teacher && roomData.teacher.id !== socket.id) {
+        console.log(`[WEBRTC] Initiating connection to teacher: ${roomData.teacher.name}`);
+        createPeerConnection(roomData.teacher.id, roomData.teacher.name, true);
+      }
+      
+      // New user initiates connection with existing students
+      if (roomData.students) {
+        roomData.students.forEach(student => {
+          if (student.id !== socket.id) {
+            console.log(`[WEBRTC] Initiating connection to existing student: ${student.name}`);
+            createPeerConnection(student.id, student.name, true);
+          }
+        });
+      }
+    };
+
     socket.on('student-joined', handleStudentJoined);
+    socket.on('room-joined', handleRoomJoined);
     socket.on('webrtc-signal', handleWebRTCSignal);
     socket.on('peer-left', handlePeerLeft);
 
     return () => {
       socket.off('student-joined', handleStudentJoined);
+      socket.off('room-joined', handleRoomJoined);
       socket.off('webrtc-signal', handleWebRTCSignal);
       socket.off('peer-left', handlePeerLeft);
       
