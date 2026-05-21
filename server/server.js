@@ -13,33 +13,49 @@ const server = http.createServer(app);
 // Dynamic CORS configuration
 const allowedOrigins = [
   process.env.CLIENT_URL,
-  'https://gmeetreplica-frontend.onrender.com', // Your actual frontend URL
+  'https://gmeetreplica-frontend.onrender.com',
   'http://localhost:5173',
   'http://127.0.0.1:5173'
-].filter(Boolean);
+].filter(Boolean).map(url => url.replace(/\/$/, "")); // Remove trailing slashes
 
 const io = new Server(server, {
   cors: {
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps or curl)
       if (!origin) return callback(null, true);
-      if (allowedOrigins.some(o => origin.startsWith(o)) || origin.includes('ngrok-free.app')) {
-        return callback(null, true);
+      
+      const normalizedOrigin = origin.replace(/\/$/, "");
+      const isAllowed = allowedOrigins.some(o => normalizedOrigin === o) || 
+                        origin.includes('ngrok-free.app') || 
+                        origin.includes('onrender.com'); // Allow all onrender.com subdomains for safety
+      
+      if (isAllowed) {
+        callback(null, true);
+      } else {
+        console.log(`[CORS] Blocked origin: ${origin}`);
+        callback(new Error('Not allowed by CORS'));
       }
-      callback(new Error('Not allowed by CORS'));
     },
-    methods: ["GET", "POST"]
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
 
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
-    if (allowedOrigins.some(o => origin.startsWith(o)) || origin.includes('ngrok-free.app')) {
-      return callback(null, true);
+    
+    const normalizedOrigin = origin.replace(/\/$/, "");
+    const isAllowed = allowedOrigins.some(o => normalizedOrigin === o) || 
+                      origin.includes('ngrok-free.app') || 
+                      origin.includes('onrender.com');
+    
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
     }
-    callback(new Error('Not allowed by CORS'));
-  }
+  },
+  credentials: true
 }));
 app.use(express.json());
 
