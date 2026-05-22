@@ -52,6 +52,7 @@ export const roomReducer = (state, action) => {
         ...state,
         room: action.payload.roomId,
         roomCode: action.payload.roomCode,
+        activeRoom: action.payload.roomCode, // Mark room as active immediately on join
         activePuzzle: action.payload.roomData.activePuzzle,
         messages: action.payload.roomData.messages || [],
         students: action.payload.roomData.students || [],

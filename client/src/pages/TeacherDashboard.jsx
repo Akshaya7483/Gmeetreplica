@@ -42,7 +42,10 @@ const TeacherDashboard = () => {
     lastPuzzleResults: contextLastResults, puzzleHistory, locked
   } = useAppContext();
   
-  const roomCode = useMemo(() => activeRoom || urlRoomCode || Math.random().toString(36).substring(2, 8).toUpperCase(), [activeRoom, urlRoomCode]);
+  // Use roomCode from state if available, otherwise generate/use URL
+  const roomCode = useMemo(() => {
+    return activeRoom || urlRoomCode || Math.random().toString(36).substring(2, 8).toUpperCase();
+  }, [activeRoom, urlRoomCode]);
   
   const [question, setQuestion] = useState('');
   const [options, setOptions] = useState(['', '', '', '']);
