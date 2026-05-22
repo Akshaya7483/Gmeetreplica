@@ -46,9 +46,24 @@ export const AppProvider = ({ children }) => {
     dispatch({ type: 'PUZZLE_STARTED', payload: puzzle });
   }, []);
 
-  const handlePuzzleEnded = useCallback(() => {
-    console.log('[SOCKET] puzzle-ended received');
-    dispatch({ type: 'PUZZLE_ENDED' });
+  const handlePuzzleEnded = useCallback((data) => {
+    console.log('[SOCKET] puzzle-ended received', data);
+    dispatch({ type: 'PUZZLE_ENDED', payload: data });
+  }, []);
+
+  const handleStudentAction = useCallback((action) => {
+    if (action.type === 'RAISE_HAND') {
+      dispatch({ type: 'RAISE_HAND', payload: action });
+      // Clear notification after 5s
+      setTimeout(() => dispatch({ type: 'LOWER_HAND', payload: action.studentId }), 5000);
+    }
+  }, []);
+
+  const handleTeacherCommand = useCallback((command) => {
+    if (command.type === 'MUTE_ALL') {
+      // This will be picked up by WebRTCVideoRoom via state or a separate signal
+      window.dispatchEvent(new CustomEvent('teacher-command', { detail: command }));
+    }
   }, []);
 
   const handleLeaderboardUpdate = useCallback((newLeaderboard) => {
@@ -64,7 +79,20 @@ export const AppProvider = ({ children }) => {
   const handleRoomJoined = useCallback((data) => {
     console.log('[SOCKET] room-joined received');
     dispatch({ type: 'SET_INITIAL_DATA', payload: data });
-    // Don't overwrite role-based user data with basic socket data
+    // Update local storage for recovery
+    if (data.roomCode) {
+      localStorage.setItem('gmeet_room', data.roomCode);
+    }
+  }, []);
+
+  const handleKicked = useCallback(() => {
+    alert('You have been removed from the room by the teacher.');
+    window.location.href = '/';
+  }, []);
+
+  const handleRoomLocked = useCallback((locked) => {
+    console.log('[SOCKET] room-locked received:', locked);
+    dispatch({ type: 'SET_ROOM_LOCKED', payload: locked });
   }, []);
 
   const handleMeetingStatus = useCallback((roomCode) => {
@@ -115,9 +143,13 @@ export const AppProvider = ({ children }) => {
     socket.on('student-left', handleStudentLeft);
     socket.on('puzzle-started', handlePuzzleStarted);
     socket.on('puzzle-ended', handlePuzzleEnded);
+    socket.on('student-action', handleStudentAction);
+    socket.on('teacher-command', handleTeacherCommand);
     socket.on('leaderboard-update', handleLeaderboardUpdate);
     socket.on('receive-message', handleReceiveMessage);
     socket.on('room-joined', handleRoomJoined);
+    socket.on('kicked', handleKicked);
+    socket.on('room-locked', handleRoomLocked);
     socket.on('meeting-status', handleMeetingStatus);
     socket.on('coach-status', handleCoachStatus);
     socket.on('error', handleError);
@@ -130,9 +162,13 @@ export const AppProvider = ({ children }) => {
       socket.off('student-left', handleStudentLeft);
       socket.off('puzzle-started', handlePuzzleStarted);
       socket.off('puzzle-ended', handlePuzzleEnded);
+      socket.off('student-action', handleStudentAction);
+      socket.off('teacher-command', handleTeacherCommand);
       socket.off('leaderboard-update', handleLeaderboardUpdate);
       socket.off('receive-message', handleReceiveMessage);
       socket.off('room-joined', handleRoomJoined);
+      socket.off('kicked', handleKicked);
+      socket.off('room-locked', handleRoomLocked);
       socket.off('meeting-status', handleMeetingStatus);
       socket.off('coach-status', handleCoachStatus);
       socket.off('error', handleError);

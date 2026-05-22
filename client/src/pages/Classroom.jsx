@@ -24,6 +24,7 @@ import {
   Badge
 } from '@chakra-ui/react';
 import { useParams } from 'react-router-dom';
+import { FaHandPaper } from 'react-icons/fa';
 import { useAppContext } from '../context/AppContext';
 import WebRTCVideoRoom from '../components/video/WebRTCVideoRoom';
 import Chat from '../components/chat/Chat';
@@ -38,6 +39,26 @@ const Classroom = () => {
   const [timeLeft, setTimeLeft] = useState(0);
   const { isOpen, onOpen, onClose } = useDisclosure();
   const toast = useToast();
+
+  const handleRaiseHand = useCallback(() => {
+    socket.emit('raise-hand', { roomCode });
+    toast({ title: "Hand Raised", status: "info", duration: 2000 });
+  }, [roomCode, toast]);
+
+  useEffect(() => {
+    const handleTeacherCommand = (e) => {
+      if (e.detail.type === 'MUTE_ALL') {
+        toast({
+          title: "Teacher muted everyone",
+          status: "warning",
+          duration: 3000,
+        });
+        // The actual muting happens in WebRTCVideoRoom via listener or state
+      }
+    };
+    window.addEventListener('teacher-command', handleTeacherCommand);
+    return () => window.removeEventListener('teacher-command', handleTeacherCommand);
+  }, [toast]);
 
   useEffect(() => {
     if (activePuzzle) {
@@ -129,8 +150,21 @@ const Classroom = () => {
           </HStack>
         </GridItem>
 
-        <GridItem area={'video'} borderRadius="xl" overflow="hidden">
-          {videoComponent}
+        <GridItem area={'video'}>
+          <VStack align="stretch" h="full" spacing={4}>
+            <HStack>
+              <Button 
+                leftIcon={<FaHandPaper />} 
+                colorScheme="yellow" 
+                onClick={handleRaiseHand}
+              >
+                Raise Hand
+              </Button>
+            </HStack>
+            <Box flex={1} borderRadius="xl" overflow="hidden">
+              {videoComponent}
+            </Box>
+          </VStack>
         </GridItem>
 
         <GridItem area={'sidebar'}>

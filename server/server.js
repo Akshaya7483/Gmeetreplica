@@ -10,6 +10,11 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 
+// Health Check Endpoint for Deployment Monitoring
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: new Date(), uptime: process.uptime() });
+});
+
 // Dynamic CORS configuration
 const allowedOrigins = [
   process.env.CLIENT_URL,
@@ -37,31 +42,38 @@ const io = new Server(server, {
     },
     methods: ["GET", "POST"],
     credentials: true
-  }
+  },
+  pingTimeout: 60000, // Increase ping timeout for stable mobile connections
+  pingInterval: 25000
 });
 
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin) return callback(null, true);
-    
-    const normalizedOrigin = origin.replace(/\/$/, "");
-    const isAllowed = allowedOrigins.some(o => normalizedOrigin === o) || 
-                      origin.includes('ngrok-free.app') || 
-                      origin.includes('onrender.com');
-    
-    if (isAllowed) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true
-}));
-app.use(express.json());
+// Production Error Handling & Environment Validation
+if (!process.env.NODE_ENV) process.env.NODE_ENV = 'development';
 
-// Routes
-app.get('/', (req, res) => {
-  res.send('Realtime Classroom Server is running...');
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught Exception:', err);
+  // Graceful shutdown could be added here
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[FATAL] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+// Setup Socket logic
+setupSocket(io);
+
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => {
+  console.log(`[SERVER] Production-hardened server running on port ${PORT} in ${process.env.NODE_ENV} mode`);
+});
+
+// Graceful Shutdown Handling
+process.on('SIGTERM', () => {
+  console.log('[SERVER] SIGTERM received. Shutting down gracefully...');
+  server.close(() => {
+    console.log('[SERVER] Closed out remaining connections.');
+    process.exit(0);
+  });
 });
 
 // Setup Socket.io

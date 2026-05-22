@@ -10,12 +10,32 @@ export const initialState = {
   connected: false,
   activeRoom: null, // Track globally if a meeting is live
   coachOnline: false,
+  raisedHands: [], 
+  lastPuzzleResults: null,
+  puzzleHistory: [],
+  locked: false, // Room lock state
 };
 
 export const roomReducer = (state, action) => {
   switch (action.type) {
-    case 'SET_ACTIVE_ROOM':
-      return { ...state, activeRoom: action.payload };
+    case 'SET_ROOM_LOCKED':
+      return { ...state, locked: action.payload };
+    case 'RAISE_HAND':
+      return { 
+        ...state, 
+        raisedHands: [...state.raisedHands, action.payload] 
+      };
+    case 'LOWER_HAND':
+      return { 
+        ...state, 
+        raisedHands: state.raisedHands.filter(h => h.studentId !== action.payload) 
+      };
+    case 'PUZZLE_ENDED':
+      return {
+        ...state,
+        activePuzzle: null,
+        lastPuzzleResults: action.payload?.finalResults || null
+      };
     case 'SET_COACH_STATUS':
       return { ...state, coachOnline: action.payload };
     case 'SET_CONNECTION':
@@ -36,6 +56,8 @@ export const roomReducer = (state, action) => {
         messages: action.payload.roomData.messages || [],
         students: action.payload.roomData.students || [],
         leaderboard: action.payload.roomData.students || [],
+        puzzleHistory: action.payload.roomData.puzzleHistory || [],
+        locked: action.payload.roomData.locked || false,
       };
     case 'STUDENT_JOINED':
       return {
@@ -63,6 +85,7 @@ export const roomReducer = (state, action) => {
       return {
         ...state,
         leaderboard: action.payload,
+        students: action.payload, // Sync students list with scores
       };
     case 'RECEIVE_MESSAGE':
       return {
