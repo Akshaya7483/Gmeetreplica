@@ -195,6 +195,30 @@ const roomHandler = (io, socket) => {
     }
   });
 
+  // Teacher Control: Pin Participant
+  socket.on('pin-participant', ({ roomCode, participantId }) => {
+    if (socket.id === coachSocketId) {
+      io.to(roomCode).emit('teacher-command', { type: 'PIN_PARTICIPANT', participantId });
+      console.log(`[COMMAND] Pin Participant ${participantId} in ${roomCode}`);
+    }
+  });
+
+  // Teacher Control: Spotlight Participant
+  socket.on('spotlight-participant', ({ roomCode, participantId }) => {
+    if (socket.id === coachSocketId) {
+      io.to(roomCode).emit('teacher-command', { type: 'SPOTLIGHT_PARTICIPANT', participantId });
+      console.log(`[COMMAND] Spotlight Participant ${participantId} in ${roomCode}`);
+    }
+  });
+
+  // Teacher Control: Request Camera
+  socket.on('request-camera', ({ roomCode, studentId }) => {
+    if (socket.id === coachSocketId) {
+      io.to(roomCode).emit('teacher-command', { type: 'REQUEST_CAMERA', studentId });
+      console.log(`[COMMAND] Request Camera from ${studentId} in ${roomCode}`);
+    }
+  });
+
   // Student Action: Raise Hand
   socket.on('raise-hand', ({ roomCode }) => {
     const { userName } = socket.data;

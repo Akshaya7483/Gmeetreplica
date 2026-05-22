@@ -14,10 +14,20 @@ export const initialState = {
   lastPuzzleResults: null,
   puzzleHistory: [],
   locked: false, // Room lock state
+  teacher: null, // Store teacher info
+  pinnedParticipant: null, // Socket ID of pinned user
+  spotlightParticipant: null, // Socket ID of spotlighted user
+  cameraRequested: false, // For local student: has teacher requested camera?
 };
 
 export const roomReducer = (state, action) => {
   switch (action.type) {
+    case 'SET_PINNED':
+      return { ...state, pinnedParticipant: action.payload };
+    case 'SET_SPOTLIGHT':
+      return { ...state, spotlightParticipant: action.payload };
+    case 'CAMERA_REQUESTED':
+      return { ...state, cameraRequested: action.payload };
     case 'SET_ROOM_LOCKED':
       return { ...state, locked: action.payload };
     case 'RAISE_HAND':
@@ -59,6 +69,7 @@ export const roomReducer = (state, action) => {
         leaderboard: action.payload.roomData.students || [],
         puzzleHistory: action.payload.roomData.puzzleHistory || [],
         locked: action.payload.roomData.locked || false,
+        teacher: action.payload.roomData.teacher || null,
       };
     case 'STUDENT_JOINED':
       return {

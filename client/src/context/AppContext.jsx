@@ -61,8 +61,16 @@ export const AppProvider = ({ children }) => {
 
   const handleTeacherCommand = useCallback((command) => {
     if (command.type === 'MUTE_ALL') {
-      // This will be picked up by WebRTCVideoRoom via state or a separate signal
       window.dispatchEvent(new CustomEvent('teacher-command', { detail: command }));
+    } else if (command.type === 'PIN_PARTICIPANT') {
+      dispatch({ type: 'SET_PINNED', payload: command.participantId });
+    } else if (command.type === 'SPOTLIGHT_PARTICIPANT') {
+      dispatch({ type: 'SET_SPOTLIGHT', payload: command.participantId });
+    } else if (command.type === 'REQUEST_CAMERA') {
+      if (socket.id === command.studentId) {
+        dispatch({ type: 'CAMERA_REQUESTED', payload: true });
+        window.dispatchEvent(new CustomEvent('camera-request'));
+      }
     }
   }, []);
 
