@@ -32,8 +32,9 @@ import Leaderboard from '../components/leaderboard/Leaderboard';
 import { socket } from '../socket';
 
 const Classroom = () => {
-  const { roomId: roomCode } = useParams();
-  const { user, activePuzzle, dispatch, connected } = useAppContext();
+  const { roomId: urlRoomCode } = useParams();
+  const { user, activePuzzle, dispatch, connected, activeRoom } = useAppContext();
+  const roomCode = activeRoom || urlRoomCode;
   const [selectedAnswer, setSelectedAnswer] = useState('');
   const [hasSubmitted, setHasSubmitted] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);

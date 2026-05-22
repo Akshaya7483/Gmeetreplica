@@ -45,7 +45,7 @@ const TeacherDashboard = () => {
   // Sync context stats with local state if needed
   const displayResults = lastPuzzleResults || contextLastResults;
   
-  const roomCode = activeRoom || urlRoomCode || Math.random().toString(36).substring(2, 8).toUpperCase();
+  const roomCode = useMemo(() => activeRoom || urlRoomCode || Math.random().toString(36).substring(2, 8).toUpperCase(), [activeRoom, urlRoomCode]);
   
   const [question, setQuestion] = useState('');
   const [options, setOptions] = useState(['', '', '', '']);
