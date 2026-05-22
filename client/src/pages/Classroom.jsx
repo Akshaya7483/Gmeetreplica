@@ -46,6 +46,45 @@ const Classroom = () => {
     toast({ title: "Hand Raised", status: "info", duration: 2000 });
   }, [roomCode, toast]);
 
+  const handleSubmit = useCallback(() => {
+    if (hasSubmitted) return;
+    
+    socket.emit('submit-answer', {
+      roomCode,
+      answer: selectedAnswer
+    });
+    
+    setHasSubmitted(true);
+    toast({
+      title: "Answer Submitted",
+      status: "success",
+      duration: 2000,
+    });
+
+    // Close the modal after a short delay to let the user see the "Submitted" state
+    setTimeout(() => {
+      onClose();
+      dispatch({ type: 'PUZZLE_ENDED' }); // Clear local state to return to video
+    }, 1500);
+  }, [hasSubmitted, roomCode, selectedAnswer, toast, onClose, dispatch]);
+
+  // Memoize heavy components
+  const videoComponent = useMemo(() => {
+    if (!user) return null;
+    return <WebRTCVideoRoom roomCode={roomCode} userName={user.name} isTeacher={false} />;
+  }, [roomCode, user]);
+
+  const sidebarComponent = useMemo(() => (
+    <VStack spacing={4} align="stretch" h="full">
+      <Box flex={1} overflowY="auto">
+        <Leaderboard />
+      </Box>
+      <Box h="300px">
+        <Chat roomId={roomCode} />
+      </Box>
+    </VStack>
+  ), [roomCode]);
+
   useEffect(() => {
     const handleTeacherCommand = (e) => {
       if (e.detail.type === 'MUTE_ALL') {
@@ -80,45 +119,9 @@ const Classroom = () => {
     } else if (timeLeft === 0 && isOpen && !hasSubmitted) {
       handleSubmit();
     }
-  }, [timeLeft, isOpen, hasSubmitted]);
+  }, [timeLeft, isOpen, hasSubmitted, handleSubmit]);
 
-  const handleSubmit = useCallback(() => {
-    if (hasSubmitted) return;
-    
-    socket.emit('submit-answer', {
-      roomCode,
-      answer: selectedAnswer
-    });
-    
-    setHasSubmitted(true);
-    toast({
-      title: "Answer Submitted",
-      status: "success",
-      duration: 2000,
-    });
-
-    // Close the modal after a short delay to let the user see the "Submitted" state
-    setTimeout(() => {
-      onClose();
-      dispatch({ type: 'PUZZLE_ENDED' }); // Clear local state to return to video
-    }, 1500);
-  }, [hasSubmitted, roomCode, selectedAnswer, toast, onClose, dispatch]);
-
-  // Memoize heavy components
-  const videoComponent = useMemo(() => (
-    <WebRTCVideoRoom roomCode={roomCode} userName={user.name} isTeacher={false} />
-  ), [roomCode, user.name]);
-
-  const sidebarComponent = useMemo(() => (
-    <VStack spacing={4} align="stretch" h="full">
-      <Box flex={1} overflowY="auto">
-        <Leaderboard />
-      </Box>
-      <Box h="300px">
-        <Chat roomId={roomCode} />
-      </Box>
-    </VStack>
-  ), [roomCode]);
+  if (!user) return null;
 
   return (
     <Box h="100vh" p={4} bg="gray.900">

@@ -42,9 +42,6 @@ const TeacherDashboard = () => {
     lastPuzzleResults: contextLastResults, puzzleHistory, locked
   } = useAppContext();
   
-  // Sync context stats with local state if needed
-  const displayResults = lastPuzzleResults || contextLastResults;
-  
   const roomCode = useMemo(() => activeRoom || urlRoomCode || Math.random().toString(36).substring(2, 8).toUpperCase(), [activeRoom, urlRoomCode]);
   
   const [question, setQuestion] = useState('');
@@ -53,6 +50,9 @@ const TeacherDashboard = () => {
   const [submissions, setSubmissions] = useState([]);
   const [lastPuzzleResults, setLastPuzzleResults] = useState(null); 
   const toast = useToast();
+
+  // Sync context stats with local state if needed
+  const displayResults = lastPuzzleResults || contextLastResults;
 
   const handleMuteAll = useCallback(() => {
     socket.emit('mute-all', { roomCode });
@@ -87,13 +87,6 @@ const TeacherDashboard = () => {
     });
   }, [roomCode, toast]);
 
-  // Sync submissions if active puzzle already has them (reconnect recovery)
-  useEffect(() => {
-    if (activePuzzle && activePuzzle.submissions) {
-      setSubmissions(activePuzzle.submissions);
-    }
-  }, [activePuzzle]);
-
   const copyRoomLink = useCallback(() => {
     const link = `${window.location.origin}/join?code=${roomCode}`;
     navigator.clipboard.writeText(link);
@@ -108,13 +101,6 @@ const TeacherDashboard = () => {
   const handleSubmissionReceived = useCallback((submission) => {
     setSubmissions(prev => [...prev, submission]);
   }, []);
-
-  useEffect(() => {
-    socket.on('submission-received', handleSubmissionReceived);
-    return () => {
-      socket.off('submission-received', handleSubmissionReceived);
-    };
-  }, [handleSubmissionReceived]);
 
   const handleStartPuzzle = useCallback(() => {
     if (!question || options.some(opt => !opt) || !correctAnswer) {
@@ -159,9 +145,26 @@ const TeacherDashboard = () => {
   }, [roomCode, dispatch, toast, submissions]);
 
   // Memoize static parts of UI to prevent rerender of video component
-  const videoComponent = React.useMemo(() => (
-    <WebRTCVideoRoom roomCode={roomCode} userName={user.name} isTeacher={true} />
-  ), [roomCode, user.name]);
+  const videoComponent = useMemo(() => {
+    if (!user) return null;
+    return <WebRTCVideoRoom roomCode={roomCode} userName={user.name} isTeacher={true} />;
+  }, [roomCode, user]);
+
+  // Sync submissions if active puzzle already has them (reconnect recovery)
+  useEffect(() => {
+    if (activePuzzle && activePuzzle.submissions) {
+      setSubmissions(activePuzzle.submissions);
+    }
+  }, [activePuzzle]);
+
+  useEffect(() => {
+    socket.on('submission-received', handleSubmissionReceived);
+    return () => {
+      socket.off('submission-received', handleSubmissionReceived);
+    };
+  }, [handleSubmissionReceived]);
+
+  if (!user) return null;
 
   return (
     <Box h="100vh" p={4} bg="gray.900">
