@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback, memo } from 'react';
+import React, { useEffect, useRef, useState, useCallback, memo, useMemo } from 'react';
 import { 
   Box, 
   Grid, 
@@ -13,7 +13,8 @@ import {
   useToast,
   Button,
   Tooltip,
-  Badge
+  Badge,
+  SimpleGrid
 } from '@chakra-ui/react';
 import { 
   FaMicrophone, 
@@ -31,7 +32,7 @@ const WebRTCVideoRoom = memo(({ roomCode, userId, userName, isTeacher }) => {
   const { students } = useAppContext();
   const [localStream, setLocalStream] = useState(null);
   const [screenStream, setScreenStream] = useState(null);
-  const [remoteStreams, setRemoteStreams] = useState({}); // { socketId: { stream, name, isScreenShare } }
+  const [remoteParticipants, setRemoteParticipants] = useState({}); // { socketId: { stream, name, isTeacher } }
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
@@ -39,7 +40,6 @@ const WebRTCVideoRoom = memo(({ roomCode, userId, userName, isTeacher }) => {
   
   const pcs = useRef({}); // Map of socketId -> RTCPeerConnection
   const iceQueues = useRef({}); // Map of socketId -> [RTCIceCandidate]
-  const localVideoRef = useRef(null);
   const streamInitializedRef = useRef(false);
   const toast = useToast();
 
@@ -58,7 +58,7 @@ const WebRTCVideoRoom = memo(({ roomCode, userId, userName, isTeacher }) => {
       try {
         console.log('[WEBRTC] Requesting media devices...');
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
+          video: { width: 640, height: 360 },
           audio: true,
         });
         setLocalStream(stream);
@@ -86,32 +86,31 @@ const WebRTCVideoRoom = memo(({ roomCode, userId, userName, isTeacher }) => {
     };
   }, []);
 
-  // 2. Peer Connection Logic (Robust Mesh)
-  const createPeerConnection = useCallback((remoteSocketId, remoteName, isInitiator) => {
+  // 2. Peer Connection Logic
+  const createPeerConnection = useCallback((remoteSocketId, remoteName, isInitiator, remoteIsTeacher = false) => {
     if (pcs.current[remoteSocketId]) {
-      console.log(`[WEBRTC] Connection already exists for ${remoteSocketId}`);
+      console.log(`[WEBRTC] PC already exists for ${remoteSocketId}`);
       return pcs.current[remoteSocketId];
     }
 
+    console.log(`[WEBRTC] Creating PC for ${remoteName}. Initiator: ${isInitiator}`);
     const pc = new RTCPeerConnection(peerConfiguration);
     pcs.current[remoteSocketId] = pc;
     iceQueues.current[remoteSocketId] = [];
 
-    // Add local tracks (Camera/Mic)
+    // Add local tracks to PC
     if (localStream) {
       localStream.getTracks().forEach(track => {
         pc.addTrack(track, localStream);
       });
     }
 
-    // Add Screen Share track if active
     if (screenStream) {
       screenStream.getTracks().forEach(track => {
         pc.addTrack(track, screenStream);
       });
     }
 
-    // ICE Candidate Handling with Queueing
     pc.onicecandidate = (event) => {
       if (event.candidate) {
         socket.emit('webrtc-signal', {
@@ -121,46 +120,41 @@ const WebRTCVideoRoom = memo(({ roomCode, userId, userName, isTeacher }) => {
       }
     };
 
-    // Track Handling: Use event.streams[0] and prioritize audio
+    // Track Handling: Use event.streams[0]
     pc.ontrack = (event) => {
-      console.log(`[WEBRTC] Track received from ${remoteSocketId}`);
+      console.log(`[WEBRTC] Remote track received from ${remoteSocketId} (${remoteName})`);
       const remoteStream = event.streams[0];
+      console.log(`[WEBRTC] Remote stream tracks for ${remoteSocketId}:`, remoteStream.getTracks());
       
-      setRemoteStreams(prev => {
-        if (prev[remoteSocketId]?.stream?.id === remoteStream.id) return prev;
-        
-        // Mesh Optimization: If not teacher and it's a student-to-student connection, 
-        // we could potentially downscale or disable video here.
-        // For now, we ensure we have the stream.
-        return {
-          ...prev,
-          [remoteSocketId]: { 
-            stream: remoteStream, 
-            name: remoteName 
-          }
-        };
-      });
+      setRemoteParticipants(prev => ({
+        ...prev,
+        [remoteSocketId]: { 
+          stream: remoteStream, 
+          name: remoteName,
+          isTeacher: remoteIsTeacher
+        }
+      }));
     };
 
-    // Bitrate Constraints for Mesh Stability (High Priority)
+    pc.oniceconnectionstatechange = () => {
+      console.log(`[WEBRTC] ICE state for ${remoteSocketId}: ${pc.iceConnectionState}`);
+      if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+        removePeer(remoteSocketId);
+      }
+    };
+
     pc.onnegotiationneeded = async () => {
+      if (!isInitiator) return;
       try {
-        await pc.setLocalDescription();
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
         socket.emit('webrtc-signal', {
           to: remoteSocketId,
-          signal: { type: 'offer', sdp: pc.localDescription }
-        });
-
-        // Set bitrate limits on video senders
-        pc.getSenders().forEach(sender => {
-          if (sender.track?.kind === 'video') {
-            const parameters = sender.getParameters();
-            if (!parameters.encodings) parameters.encodings = [{}];
-            
-            // Limit to 300kbps for students to save bandwidth in mesh
-            // Teachers get 1.5mbps for better quality
-            parameters.encodings[0].maxBitrate = isTeacher ? 1500000 : 300000;
-            sender.setParameters(parameters).catch(e => console.warn('[WEBRTC] Bitrate set error:', e));
+          signal: { 
+            type: 'offer', 
+            sdp: pc.localDescription, 
+            fromName: userName, 
+            fromIsTeacher: isTeacher 
           }
         });
       } catch (err) {
@@ -168,31 +162,8 @@ const WebRTCVideoRoom = memo(({ roomCode, userId, userName, isTeacher }) => {
       }
     };
 
-    // Reconnection & Stability Handling
-    pc.oniceconnectionstatechange = () => {
-      const state = pc.iceConnectionState;
-      console.log(`[WEBRTC] ICE state for ${remoteSocketId}: ${state}`);
-      if (state === 'failed' || state === 'disconnected') {
-        console.log(`[WEBRTC] Connection failed, cleaning up ${remoteSocketId}`);
-        removePeer(remoteSocketId);
-      }
-    };
-
-    // Negotiation Logic
-    if (isInitiator) {
-      pc.createOffer()
-        .then(offer => pc.setLocalDescription(offer))
-        .then(() => {
-          socket.emit('webrtc-signal', {
-            to: remoteSocketId,
-            signal: { type: 'offer', sdp: pc.localDescription }
-          });
-        })
-        .catch(err => console.error('[WEBRTC] Offer error:', err));
-    }
-
     return pc;
-  }, [localStream, screenStream]);
+  }, [localStream, screenStream, userName, isTeacher]);
 
   const removePeer = (socketId) => {
     if (pcs.current[socketId]) {
@@ -200,58 +171,42 @@ const WebRTCVideoRoom = memo(({ roomCode, userId, userName, isTeacher }) => {
       delete pcs.current[socketId];
     }
     delete iceQueues.current[socketId];
-    setRemoteStreams(prev => {
+    setRemoteParticipants(prev => {
       const newState = { ...prev };
       delete newState[socketId];
       return newState;
     });
   };
 
-  // 3. Signaling Listeners & Reconnection Logic
+  // 3. Signaling Listeners
   useEffect(() => {
     if (!localStream) return;
 
-    // Handle Socket Reconnection
-    const handleReconnect = () => {
-      console.log('[WEBRTC] Socket reconnected, restarting peer connections...');
-      // Clear existing peers and re-sync
-      Object.values(pcs.current).forEach(pc => pc.close());
-      pcs.current = {};
-      setRemoteStreams({});
-      syncExistingPeers();
-    };
-
-    socket.on('connect', handleReconnect);
-
-    // Tie-breaker for peer initiation to prevent race conditions
     const shouldInitiate = (remoteId) => socket.id > remoteId;
 
     const handleStudentJoined = ({ student }) => {
       if (student.id !== socket.id) {
-        const initiator = shouldInitiate(student.id);
-        createPeerConnection(student.id, student.name, initiator);
+        createPeerConnection(student.id, student.name, shouldInitiate(student.id), false);
       }
     };
 
     const syncExistingPeers = () => {
-      students.forEach(participant => {
-        if (participant.id !== socket.id) {
-          const initiator = shouldInitiate(participant.id);
-          createPeerConnection(participant.id, participant.name, initiator);
+      students.forEach(p => {
+        if (p.id !== socket.id) {
+          createPeerConnection(p.id, p.name, shouldInitiate(p.id), p.role === 'coach' || p.role === 'teacher');
         }
       });
     };
 
     syncExistingPeers();
 
-    const handleWebRTCSignal = async ({ from, fromName, signal }) => {
+    const handleWebRTCSignal = async ({ from, fromName, fromIsTeacher, signal }) => {
       let pc = pcs.current[from];
 
       if (signal.type === 'offer') {
-        if (!pc) pc = createPeerConnection(from, fromName || 'Remote User', false);
+        if (!pc) pc = createPeerConnection(from, fromName || 'Remote User', false, fromIsTeacher);
         
         try {
-          // If we receive an offer while we are in stable state, it's likely a renegotiation
           await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
@@ -261,11 +216,9 @@ const WebRTCVideoRoom = memo(({ roomCode, userId, userName, isTeacher }) => {
             signal: { type: 'answer', sdp: pc.localDescription }
           });
 
-          // Process queued ICE candidates
-          if (iceQueues.current[from]) {
-            while (iceQueues.current[from].length > 0) {
-              await pc.addIceCandidate(new RTCIceCandidate(iceQueues.current[from].shift()));
-            }
+          const queue = iceQueues.current[from] || [];
+          while (queue.length > 0) {
+            await pc.addIceCandidate(new RTCIceCandidate(queue.shift()));
           }
         } catch (err) {
           console.error('[WEBRTC] Signal handling error:', err);
@@ -284,63 +237,32 @@ const WebRTCVideoRoom = memo(({ roomCode, userId, userName, isTeacher }) => {
       }
     };
 
-    const handlePeerLeft = ({ id }) => {
-      console.log(`[WEBRTC] Cleaning up peer ${id}`);
-      removePeer(id);
-    };
+    const handlePeerLeft = ({ id }) => removePeer(id);
 
     socket.on('student-joined', handleStudentJoined);
     socket.on('webrtc-signal', handleWebRTCSignal);
     socket.on('peer-left', handlePeerLeft);
 
-    const handleTeacherCommand = (e) => {
-      if (e.detail.type === 'MUTE_ALL' && !isTeacher) {
-        if (localStream) {
-          localStream.getAudioTracks().forEach(track => {
-            track.enabled = false;
-          });
-          setIsMuted(true);
-        }
-      }
-    };
-    window.addEventListener('teacher-command', handleTeacherCommand);
-
     return () => {
-      socket.off('connect', handleReconnect);
       socket.off('student-joined', handleStudentJoined);
       socket.off('webrtc-signal', handleWebRTCSignal);
       socket.off('peer-left', handlePeerLeft);
-      window.removeEventListener('teacher-command', handleTeacherCommand);
-      
-      // Full cleanup to prevent memory leaks
-      Object.values(pcs.current).forEach(pc => {
-        pc.onicecandidate = null;
-        pc.ontrack = null;
-        pc.oniceconnectionstatechange = null;
-        pc.onconnectionstatechange = null;
-        pc.onnegotiationneeded = null;
-        pc.close();
-      });
+      Object.values(pcs.current).forEach(pc => pc.close());
       pcs.current = {};
-      iceQueues.current = {};
     };
-  }, [localStream, createPeerConnection, students, isTeacher]);
+  }, [localStream, createPeerConnection, students]);
 
   // 4. Media Controls
   const toggleMute = () => {
     if (localStream) {
-      localStream.getAudioTracks().forEach(track => {
-        track.enabled = !track.enabled;
-      });
+      localStream.getAudioTracks().forEach(track => track.enabled = !track.enabled);
       setIsMuted(!isMuted);
     }
   };
 
   const toggleVideo = () => {
     if (localStream) {
-      localStream.getVideoTracks().forEach(track => {
-        track.enabled = !track.enabled;
-      });
+      localStream.getVideoTracks().forEach(track => track.enabled = !track.enabled);
       setIsVideoOff(!isVideoOff);
     }
   };
@@ -351,22 +273,9 @@ const WebRTCVideoRoom = memo(({ roomCode, userId, userName, isTeacher }) => {
         const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
         setScreenStream(stream);
         setIsScreenSharing(true);
-        
-        // Update all peer connections with the screen track
         Object.values(pcs.current).forEach(pc => {
           stream.getTracks().forEach(track => pc.addTrack(track, stream));
-          // Trigger re-negotiation
-          pc.createOffer()
-            .then(offer => pc.setLocalDescription(offer))
-            .then(() => {
-              const remoteId = Object.keys(pcs.current).find(id => pcs.current[id] === pc);
-              socket.emit('webrtc-signal', {
-                to: remoteId,
-                signal: { type: 'offer', sdp: pc.localDescription }
-              });
-            });
         });
-
         stream.getVideoTracks()[0].onended = () => stopScreenShare();
       } catch (err) {
         console.error('[WEBRTC] Screen share error:', err);
@@ -389,172 +298,97 @@ const WebRTCVideoRoom = memo(({ roomCode, userId, userName, isTeacher }) => {
       <Center h="full" bg="gray.900" borderRadius="xl">
         <VStack spacing={4}>
           <Spinner size="xl" color="purple.500" thickness="4px" />
-          <Text color="white" fontWeight="bold">Setting up your classroom...</Text>
+          <Text color="white" fontWeight="bold">Initializing video...</Text>
         </VStack>
       </Center>
     );
   }
 
-  const allParticipants = [
-    { id: 'local', stream: localStream, name: `${userName} (You)`, isLocal: true },
-    ...(screenStream ? [{ id: 'screen', stream: screenStream, name: 'Your Screen', isLocal: true, isScreen: true }] : []),
-    ...Object.entries(remoteStreams).map(([id, data]) => ({
-      id,
-      stream: data.stream,
-      name: data.name,
-      isLocal: false
-    }))
-  ];
+  // 5. Grid Logic
+  const localParticipant = { id: 'local', stream: localStream, name: `${userName} (You)`, isTeacher, isLocal: true };
+  const allPeers = [localParticipant, ...Object.entries(remoteParticipants).map(([id, data]) => ({ id, ...data, isLocal: false }))];
+  
+  const teacherPeer = allPeers.find(p => p.isTeacher);
+  const studentPeers = allPeers.filter(p => !p.isTeacher);
 
   return (
     <Box h="full" w="full" bg="gray.900" borderRadius="xl" overflow="hidden" position="relative">
-      <Grid
-        templateColumns={{ 
-          base: "1fr", 
-          md: allParticipants.length <= 1 ? "1fr" : allParticipants.length <= 2 ? "1fr 1fr" : "repeat(auto-fit, minmax(300px, 1fr))" 
-        }}
-        gap={2}
-        p={2}
-        h="full"
-        alignContent="center"
-      >
-        {allParticipants.map((participant) => (
-          <VideoTile 
-            key={participant.id} 
-            participant={participant} 
-            isLocal={participant.isLocal} 
-          />
-        ))}
-      </Grid>
+      <Flex h="full" direction="column" p={2} gap={2}>
+        {/* Main Section: Teacher or Active Speaker */}
+        {teacherPeer && (
+          <Box flex={2} position="relative" borderRadius="2xl" overflow="hidden" boxShadow="2xl" border="1px solid" borderColor="whiteAlpha.200">
+            <VideoTile participant={teacherPeer} isLocal={teacherPeer.isLocal} isLarge />
+          </Box>
+        )}
 
-      {/* Modern Control Bar */}
+        {/* Bottom Section: Students Grid */}
+        <Box flex={1} overflowY="auto" css={{ '&::-webkit-scrollbar': { width: '4px' }, '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.1)', borderRadius: '10px' } }}>
+          <SimpleGrid columns={{ base: 2, md: 3, lg: 4 }} spacing={2}>
+            {studentPeers.map(p => (
+              <Box key={p.id} h="160px" borderRadius="xl" overflow="hidden" border="1px solid" borderColor="whiteAlpha.100">
+                <VideoTile participant={p} isLocal={p.isLocal} />
+              </Box>
+            ))}
+          </SimpleGrid>
+        </Box>
+      </Flex>
+
+      {/* Control Bar */}
       <Flex 
-        position="absolute" 
-        bottom={6} 
-        left="50%" 
-        transform="translateX(-50%)" 
-        bg="rgba(15, 15, 20, 0.85)" 
-        px={6} 
-        py={3} 
-        borderRadius="2xl"
-        backdropFilter="blur(15px)"
-        border="1px solid"
-        borderColor="whiteAlpha.200"
-        gap={6}
-        boxShadow="2xl"
-        zIndex={100}
+        position="absolute" bottom={6} left="50%" transform="translateX(-50%)" 
+        bg="rgba(15, 15, 20, 0.9)" px={6} py={3} borderRadius="2xl" backdropFilter="blur(20px)" 
+        border="1px solid" borderColor="whiteAlpha.200" gap={6} boxShadow="dark-lg" zIndex={100}
       >
-        <Tooltip label={isMuted ? "Unmute Mic" : "Mute Mic"}>
-          <IconButton
-            icon={isMuted ? <FaMicrophoneSlash /> : <FaMicrophone />}
-            onClick={toggleMute}
-            colorScheme={isMuted ? "red" : "whiteAlpha"}
-            variant={isMuted ? "solid" : "ghost"}
-            rounded="full"
-            aria-label="Toggle Mute"
-          />
-        </Tooltip>
-
-        <Tooltip label={isVideoOff ? "Turn Camera On" : "Turn Camera Off"}>
-          <IconButton
-            icon={isVideoOff ? <FaVideoSlash /> : <FaVideo />}
-            onClick={toggleVideo}
-            colorScheme={isVideoOff ? "red" : "whiteAlpha"}
-            variant={isVideoOff ? "solid" : "ghost"}
-            rounded="full"
-            aria-label="Toggle Video"
-          />
-        </Tooltip>
-
-        <Tooltip label={isScreenSharing ? "Stop Sharing" : "Share Screen"}>
-          <IconButton
-            icon={isScreenSharing ? <FaStopCircle /> : <FaDesktop />}
-            onClick={toggleScreenShare}
-            colorScheme={isScreenSharing ? "green" : "whiteAlpha"}
-            variant={isScreenSharing ? "solid" : "ghost"}
-            rounded="full"
-            aria-label="Toggle Screen Share"
-          />
-        </Tooltip>
-
+        <IconButton
+          icon={isMuted ? <FaMicrophoneSlash /> : <FaMicrophone />}
+          onClick={toggleMute} colorScheme={isMuted ? "red" : "whiteAlpha"} variant={isMuted ? "solid" : "ghost"} rounded="full"
+        />
+        <IconButton
+          icon={isVideoOff ? <FaVideoSlash /> : <FaVideo />}
+          onClick={toggleVideo} colorScheme={isVideoOff ? "red" : "whiteAlpha"} variant={isVideoOff ? "solid" : "ghost"} rounded="full"
+        />
+        <IconButton
+          icon={isScreenSharing ? <FaStopCircle /> : <FaDesktop />}
+          onClick={toggleScreenShare} colorScheme={isScreenSharing ? "green" : "whiteAlpha"} variant={isScreenSharing ? "solid" : "ghost"} rounded="full"
+        />
         <Box borderLeft="1px solid" borderColor="whiteAlpha.300" mx={1} h="40px" />
-
-        <HStack spacing={2} px={2}>
+        <HStack spacing={2}>
           <FaUserFriends color="white" />
-          <Badge colorScheme="purple" borderRadius="full" px={2}>
-            {students.length + 1}
-          </Badge>
+          <Badge colorScheme="purple" borderRadius="full" px={2}>{allPeers.length}</Badge>
         </HStack>
       </Flex>
     </Box>
   );
 });
 
-const VideoTile = ({ participant, isLocal }) => {
+const VideoTile = ({ participant, isLocal, isLarge }) => {
   const videoRef = useRef(null);
   const [playError, setPlayError] = useState(false);
 
   useEffect(() => {
     if (videoRef.current && participant.stream) {
       videoRef.current.srcObject = participant.stream;
-      
-      const playPromise = videoRef.current.play();
-      if (playPromise !== undefined) {
-        playPromise.catch(error => {
-          console.warn("[WEBRTC] Autoplay prevented:", error);
-          setPlayError(true);
-        });
-      }
+      videoRef.current.play().catch(e => {
+        console.warn("[WEBRTC] Autoplay blocked", e);
+        setPlayError(true);
+      });
     }
   }, [participant.stream]);
 
-  const handleManualPlay = () => {
-    if (videoRef.current) {
-      videoRef.current.play().then(() => setPlayError(false));
-    }
-  };
-
   return (
-    <Box 
-      position="relative" 
-      bg="gray.800" 
-      borderRadius="2xl" 
-      overflow="hidden"
-      boxShadow="xl"
-      border="1px solid"
-      borderColor="whiteAlpha.100"
-      transition="transform 0.2s"
-      _hover={{ transform: "scale(1.01)" }}
-      maxH="400px"
-    >
+    <Box position="relative" h="full" w="full" bg="gray.800">
       <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted={isLocal}
+        ref={videoRef} autoPlay playsInline muted={isLocal}
         style={{ width: '100%', height: '100%', objectFit: 'cover' }}
       />
-      
       {playError && !isLocal && (
-        <Center position="absolute" top={0} left={0} right={0} bottom={0} bg="blackAlpha.800" zIndex={10}>
-          <Button size="md" colorScheme="purple" onClick={handleManualPlay} leftIcon={<FaVideo />}>
-            Resume Stream
-          </Button>
+        <Center position="absolute" inset={0} bg="blackAlpha.800" zIndex={10}>
+          <Button size="sm" colorScheme="purple" onClick={() => videoRef.current.play()}>Resume Stream</Button>
         </Center>
       )}
-
-      <Box 
-        position="absolute" 
-        bottom={4} 
-        left={4} 
-        bg="rgba(0,0,0,0.6)" 
-        px={3} 
-        py={1.5} 
-        borderRadius="xl"
-        backdropFilter="blur(5px)"
-      >
-        <Text color="white" fontSize="sm" fontWeight="bold">
-          {participant.name}
+      <Box position="absolute" bottom={isLarge ? 6 : 2} left={isLarge ? 6 : 2} bg="blackAlpha.700" px={3} py={1} borderRadius="lg" backdropFilter="blur(5px)">
+        <Text color="white" fontSize={isLarge ? "md" : "xs"} fontWeight="bold">
+          {participant.name} {participant.isTeacher && "(Coach)"}
         </Text>
       </Box>
     </Box>
